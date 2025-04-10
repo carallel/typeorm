@@ -45,6 +45,7 @@ import { AuroraMysqlDriver } from "../driver/aurora-mysql/AuroraMysqlDriver"
 import { InstanceChecker } from "../util/InstanceChecker"
 import { FindOperator } from "../find-options/FindOperator"
 import { ApplyValueTransformers } from "../util/ApplyValueTransformers"
+import { SqlServerDriver } from "../driver/sqlserver/SqlServerDriver"
 
 /**
  * Allows to build complex sql queries in a fashion way and execute those queries.
@@ -2896,11 +2897,6 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
                     })
                 })
             } else {
-                if (column.isVirtualProperty) {
-                    // Do not add unselected virtual properties to final select
-                    return
-                }
-
                 finalSelects.push({
                     selection: selectionPath,
                     aliasName: DriverUtils.buildAlias(
@@ -3886,7 +3882,7 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
         alias: string,
         embedPrefix?: string,
     ) {
-        for (let key in select) {
+        for (const key in select) {
             if (select[key] === undefined || select[key] === false) continue
 
             const propertyPath = embedPrefix ? embedPrefix + "." + key : key
@@ -4131,7 +4127,7 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
         alias: string,
         embedPrefix?: string,
     ) {
-        for (let key in order) {
+        for (const key in order) {
             if (order[key] === undefined) continue
 
             const propertyPath = embedPrefix ? embedPrefix + "." + key : key
@@ -4165,7 +4161,7 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
                         ? "NULLS LAST"
                         : undefined
 
-                let aliasPath = `${alias}.${propertyPath}`
+                const aliasPath = `${alias}.${propertyPath}`
                 // const selection = this.expressionMap.selects.find(
                 //     (s) => s.selection === aliasPath,
                 // )
@@ -4254,8 +4250,8 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
                     .join(" OR ")
             }
         } else {
-            let andConditions: string[] = []
-            for (let key in where) {
+            const andConditions: string[] = []
+            for (const key in where) {
                 if (where[key] === undefined || where[key] === null) continue
 
                 const propertyPath = embedPrefix ? embedPrefix + "." + key : key
@@ -4275,7 +4271,7 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
                 if (column) {
                     let aliasPath = `${alias}.${propertyPath}`
                     if (column.isVirtualProperty && column.query) {
-                        aliasPath = `(${column.query(alias)})`
+                        aliasPath = `(${column.query(this.escape(alias))})`
                     }
                     // const parameterName = alias + "_" + propertyPath.split(".").join("_") + "_" + parameterIndex;
 
@@ -4284,14 +4280,35 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
                     if (InstanceChecker.isEqualOperator(where[key])) {
                         parameterValue = where[key].value
                     }
+
                     if (column.transformer) {
-                        parameterValue instanceof FindOperator
-                            ? parameterValue.transformValue(column.transformer)
-                            : (parameterValue =
-                                  ApplyValueTransformers.transformTo(
-                                      column.transformer,
-                                      parameterValue,
-                                  ))
+                        if (parameterValue instanceof FindOperator) {
+                            parameterValue.transformValue(column.transformer)
+                        } else {
+                            parameterValue = ApplyValueTransformers.transformTo(
+                                column.transformer,
+                                parameterValue,
+                            )
+                        }
+                    }
+
+                    // MSSQL requires parameters to carry extra type information
+                    if (this.connection.driver.options.type === "mssql") {
+                        const driver = this.connection.driver as SqlServerDriver
+                        if (parameterValue instanceof FindOperator) {
+                            if (parameterValue.type !== "raw") {
+                                parameterValue.transformValue({
+                                    to: (v) =>
+                                        driver.parametrizeValue(column, v),
+                                    from: (v) => v,
+                                })
+                            }
+                        } else {
+                            parameterValue = driver.parametrizeValue(
+                                column,
+                                parameterValue,
+                            )
+                        }
                     }
 
                     // if (parameterValue === null) {
